@@ -3,13 +3,15 @@
 
 defaults:
   - retrieval: mhier # Change this to text/image when configuring retrieval
+  - dataset: base
   - _self_
 
 run-name: mmlb-MDA # Experiment name
 
 dataset:
   top_k: 1 # Top-k results used during inference
-
+  data_dir: ./data/mhier
+  
 retrieval:
   top_k: 10 # Top-k results returned during retrieval
   cuda_visible_devices: '0'
