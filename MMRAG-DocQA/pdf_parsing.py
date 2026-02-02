@@ -91,8 +91,9 @@ class PDFParser:
 
         artifacts_path = Path(artifacts_path)
         model_check = artifacts_path / "model_artifacts" / "layout" / "model.safetensors"
-        if not model_check.exists():
-            artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=False)
+        force_download = os.getenv("DOCLING_FORCE_DOWNLOAD", "0").strip() in {"1", "true", "True"}
+        if force_download or not model_check.exists():
+            artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=force_download)
 
         pipeline_options = PdfPipelineOptions(artifacts_path=artifacts_path)
         pipeline_options.do_ocr = True
