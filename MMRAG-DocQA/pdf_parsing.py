@@ -83,7 +83,18 @@ class PDFParser:
         from docling.datamodel.base_models import InputFormat
         from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
         
-        pipeline_options = PdfPipelineOptions(artifacts_path="") 
+        artifacts_path = os.getenv("DOCLING_ARTIFACTS_PATH")
+        if artifacts_path == "":
+            artifacts_path = None
+        if artifacts_path is None:
+            artifacts_path = str(Path(__file__).resolve().parents[1] / "model_cache" / "docling_models")
+
+        artifacts_path = Path(artifacts_path)
+        model_check = artifacts_path / "model_artifacts" / "layout" / "model.safetensors"
+        if not model_check.exists():
+            artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=False)
+
+        pipeline_options = PdfPipelineOptions(artifacts_path=artifacts_path)
         pipeline_options.do_ocr = True
         ocr_options = EasyOcrOptions(lang=['en'], force_full_page_ocr=False) 
         pipeline_options.ocr_options = ocr_options
