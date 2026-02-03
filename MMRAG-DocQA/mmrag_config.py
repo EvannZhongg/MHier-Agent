@@ -1,7 +1,9 @@
+import json
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+import httpx
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -62,9 +64,15 @@ def get_embedding_max_batch_size():
 def get_openai_client(purpose: str):
     from openai import OpenAI
 
+    http_client = None
+    if _is_truthy(os.getenv("API_LOG", "0")):
+        http_client = httpx.Client(
+            event_hooks=_build_httpx_hooks(purpose)
+        )
     return OpenAI(
         api_key=get_api_key(purpose),
         base_url=get_base_url(),
+        http_client=http_client,
     )
 
 
@@ -81,3 +89,30 @@ def set_model_cache_env():
 
 
 load_env()
+
+
+def _is_truthy(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _build_httpx_hooks(purpose: str):
+    model_name = get_model_name(purpose)
+
+    def _log_request(request: httpx.Request):
+        msg = f"[API:{purpose}] {request.method} {request.url} model={model_name}"
+        if _is_truthy(os.getenv("API_LOG_BODY", "0")):
+            try:
+                body = request.content.decode("utf-8")
+                data = json.loads(body)
+                if "messages" in data and isinstance(data["messages"], list):
+                    msg += f" messages={len(data['messages'])}"
+                if "input" in data and isinstance(data["input"], list):
+                    msg += f" batch={len(data['input'])}"
+            except Exception:
+                pass
+        print(msg)
+
+    def _log_response(response: httpx.Response):
+        print(f"[API:{purpose}] {response.status_code} {response.request.method} {response.request.url}")
+
+    return {"request": [_log_request], "response": [_log_response]}

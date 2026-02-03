@@ -96,9 +96,11 @@ class PDFParser:
             artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=force_download)
 
         pipeline_options = PdfPipelineOptions(artifacts_path=artifacts_path)
-        pipeline_options.do_ocr = True
-        ocr_options = EasyOcrOptions(lang=['en'], force_full_page_ocr=False) 
-        pipeline_options.ocr_options = ocr_options
+        disable_ocr = os.getenv("DOCLING_DISABLE_OCR", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        pipeline_options.do_ocr = not disable_ocr
+        if pipeline_options.do_ocr:
+            ocr_options = EasyOcrOptions(lang=['en'], force_full_page_ocr=False)
+            pipeline_options.ocr_options = ocr_options
         pipeline_options.do_table_structure = True
         pipeline_options.table_structure_options.do_cell_matching = True
         pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
@@ -187,12 +189,54 @@ class PDFParser:
         
         total_docs = len(input_doc_paths)
         _log.info(f"Starting to process {total_docs} documents")
+        safe_mode = str(os.getenv("DOCLING_SKIP_ERRORS", "0")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        ocr_fallback = str(os.getenv("DOCLING_OCR_FALLBACK", "0")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        disable_ocr = str(os.getenv("DOCLING_DISABLE_OCR", "0")).strip().lower() in {"1", "true", "yes", "y", "on"}
         
-        conv_results = self.convert_documents(input_doc_paths)
-        success_count, failure_count = self.process_documents(conv_results=conv_results) 
+        if safe_mode:
+            success_count = 0
+            failure_count = 0
+            for doc_path in input_doc_paths:
+                try:
+                    conv_results = self.convert_documents([doc_path])
+                    sc, fc = self.process_documents(conv_results=conv_results)
+                    success_count += sc
+                    failure_count += fc
+                except Exception as e:
+                    _log.error(f"Encountered an error during conversion of document {doc_path}: {e}")
+                    if ocr_fallback and not disable_ocr:
+                        _log.info(f"Retrying {doc_path} with OCR disabled...")
+                        prev_disable = os.getenv("DOCLING_DISABLE_OCR")
+                        os.environ["DOCLING_DISABLE_OCR"] = "1"
+                        try:
+                            fallback_parser = PDFParser(
+                                pdf_backend=self.pdf_backend,
+                                output_dir=self.output_dir,
+                                num_threads=self.num_threads,
+                                csv_metadata_path=None,
+                            )
+                            fallback_parser.metadata_lookup = self.metadata_lookup
+                            fallback_parser.debug_data_path = self.debug_data_path
+                            conv_results = fallback_parser.convert_documents([doc_path])
+                            sc, fc = fallback_parser.process_documents(conv_results=conv_results)
+                            success_count += sc
+                            failure_count += fc
+                        except Exception as e2:
+                            failure_count += 1
+                            _log.error(f"OCR fallback failed for {doc_path}: {e2}")
+                        finally:
+                            if prev_disable is None:
+                                os.environ.pop("DOCLING_DISABLE_OCR", None)
+                            else:
+                                os.environ["DOCLING_DISABLE_OCR"] = prev_disable
+                    else:
+                        failure_count += 1
+        else:
+            conv_results = self.convert_documents(input_doc_paths)
+            success_count, failure_count = self.process_documents(conv_results=conv_results) 
         elapsed_time = time.time() - start_time
 
-        if failure_count > 0:
+        if failure_count > 0 and not safe_mode:
             error_message = f"Failed converting {failure_count} out of {total_docs} documents."
             failed_docs = "Paths of failed docs:\n" + '\n'.join(str(path) for path in input_doc_paths)
             _log.error(error_message)
