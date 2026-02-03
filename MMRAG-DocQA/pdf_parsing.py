@@ -79,9 +79,11 @@ class PDFParser:
     def _create_document_converter(self) -> "DocumentConverter": 
         """Creates and returns a DocumentConverter with default pipeline options."""
         from docling.document_converter import DocumentConverter, FormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, EasyOcrOptions
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, EasyOcrOptions, LayoutOptions
         from docling.datamodel.base_models import InputFormat
         from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+        from huggingface_hub import snapshot_download
+        from docling.utils.model_downloader import download_models as docling_download_models
         
         artifacts_path = os.getenv("DOCLING_ARTIFACTS_PATH")
         if artifacts_path == "":
@@ -90,16 +92,42 @@ class PDFParser:
             artifacts_path = str(Path(__file__).resolve().parents[1] / "model_cache" / "docling_models")
 
         artifacts_path = Path(artifacts_path)
-        model_check = artifacts_path / "model_artifacts" / "layout" / "model.safetensors"
+        layout_spec = LayoutOptions().model_spec
+        layout_check_new = artifacts_path / layout_spec.model_repo_folder / layout_spec.model_path / "model.safetensors"
         force_download = os.getenv("DOCLING_FORCE_DOWNLOAD", "0").strip() in {"1", "true", "True"}
-        if force_download or not model_check.exists():
-            artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=force_download)
+        if force_download or not layout_check_new.exists():
+            try:
+                artifacts_path = docling_download_models(
+                    output_dir=artifacts_path,
+                    force=force_download,
+                    progress=True,
+                    with_easyocr=False,
+                )
+            except Exception:
+                if hasattr(StandardPdfPipeline, "download_models_hf"):
+                    artifacts_path = StandardPdfPipeline.download_models_hf(local_dir=artifacts_path, force=force_download)
+                else:
+                    artifacts_path = snapshot_download(
+                        repo_id="ds4sd/docling-models",
+                        revision="v2.1.0",
+                        local_dir=artifacts_path,
+                        force_download=force_download,
+                    )
 
         pipeline_options = PdfPipelineOptions(artifacts_path=artifacts_path)
         disable_ocr = os.getenv("DOCLING_DISABLE_OCR", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         pipeline_options.do_ocr = not disable_ocr
         if pipeline_options.do_ocr:
-            ocr_options = EasyOcrOptions(lang=['en'], force_full_page_ocr=False)
+            easyocr_dir = os.getenv("DOCLING_EASYOCR_DIR")
+            if not easyocr_dir:
+                easyocr_dir = str(Path(artifacts_path) / "EasyOcr")
+            easyocr_download = os.getenv("DOCLING_EASYOCR_DOWNLOAD", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+            ocr_options = EasyOcrOptions(
+                lang=['en'],
+                force_full_page_ocr=False,
+                model_storage_directory=easyocr_dir,
+                download_enabled=easyocr_download,
+            )
             pipeline_options.ocr_options = ocr_options
         pipeline_options.do_table_structure = True
         pipeline_options.table_structure_options.do_cell_matching = True
